@@ -1,0 +1,16 @@
+
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build BERTIE Firmware",
+      "type": "shell",
+      "command": "bash build.sh",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
