@@ -1,19 +1,23 @@
 #include <M5Cardputer.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Update.h>
+#include "secrets.h"
 
 void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);
 
   // Set Up the Display
-  M5Cardputer.Display.setRotation(1);
+  M5Cardputer.Display.setRotation(0);
   M5Cardputer.Display.fillScreen(TFT_BLACK);
   M5Cardputer.Display.setTextColor(TFT_GREEN);
-  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setTextSize(3);
   M5Cardputer.Display.setCursor(8, 8);
 
   M5Cardputer.Display.println("BERTIE");
 
-  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(TFT_YELLOW);
   M5Cardputer.Display.println("Bindery Executive for Robotics, Tools, Information & Equipment");
   M5Cardputer.Display.setTextColor(TFT_WHITE);
