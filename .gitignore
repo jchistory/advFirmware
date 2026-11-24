@@ -12,3 +12,5 @@ bertie-*.bin
 
 # Operating system files
 .DS_Store
+
+include/secrets.h
