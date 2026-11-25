@@ -98,7 +98,7 @@ void setup() {
   M5Cardputer.Display.println("Terminal v0.1");
   M5Cardputer.Display.println("Keyboard test:");
 
-  startOTA;
+  startOTA();
 }
 
 void loop() {
