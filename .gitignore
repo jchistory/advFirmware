@@ -1,16 +1,7 @@
-# PlatformIO generated files
 .pio/
-
-# Python virtual environment
 .venv/
-
-# IntelliSense generated database
 compile_commands.json
-
-# Generated firmware images
 bertie-*.bin
-
-# Operating system files
 .DS_Store
-
 include/secrets.h
+include/build_version.h

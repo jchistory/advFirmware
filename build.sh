@@ -1,18 +1,17 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "Building BERTIE firmware..."
+echo "Building BERTIE Cardputer ADV firmware..."
+.venv/bin/pio run -e cardputer-adv
 
-# Compile the firmware
-.venv/bin/pio run
+# Application-only image: upload this through the OTA webpage.
+cp .pio/build/cardputer-adv/firmware.bin bertie-v0.3-ota.bin
 
-echo "Merging firmware..."
-
-# Combine components into one binary
+echo "Creating USB recovery image..."
 .venv/bin/python \
   "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" \
   --chip esp32s3 merge_bin \
-  -o bertie-v0.1-merged.bin \
+  -o bertie-v0.3-merged.bin \
   --flash_mode dio \
   --flash_freq 40m \
   --flash_size 8MB \
@@ -21,4 +20,5 @@ echo "Merging firmware..."
   0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
   0x10000 .pio/build/cardputer-adv/firmware.bin
 
-echo "BERTIE firmware ready!"
+echo "Ready: bertie-v0.3-ota.bin (browser OTA)"
+echo "Ready: bertie-v0.3-merged.bin (USB recovery, offset 0x0)"
