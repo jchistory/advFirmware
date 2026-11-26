@@ -221,9 +221,20 @@ void checkForFirmwareUpdate() {
     }
     http.addHeader("User-Agent", "BERTIE-Cardputer-ADV");
     int code = http.GET();
+
     if (code != HTTP_CODE_OK) {
-        screenMessage(code == 404 ? "No releases yet" : "GitHub request failed");
-        http.end(); disconnectHomeWiFi(); return;
+        screenMessage("GitHub error:");
+        screenMessage(String(code));
+
+        if (code < 0) {
+            screenMessage(http.errorToString(code));
+        }
+
+        Serial.printf("GitHub HTTP result: %d\n", code);
+
+        http.end();
+        disconnectHomeWiFi();
+        return;
     }
     String body = http.getString();
     http.end();
