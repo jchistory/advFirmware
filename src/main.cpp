@@ -8,9 +8,8 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <time.h>
-#include "github_ca.h"
+#include <esp32_cert_bundle.h>
 
-// Optional local-only header from the previous firmware. Not required by CI.
 #if __has_include("secrets.h")
   #include "secrets.h"
   #define HAS_LOCAL_OTA_SECRET 1
@@ -27,14 +26,9 @@ static constexpr const char* GITHUB_RELEASE_API =
 static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
 WebServer otaServer(80);
 Preferences preferences;
-String otaPassword;
-String homeSSID;
-String homePassword;
-String offeredURL;
+String otaPassword, homeSSID, homePassword, offeredURL;
 uint32_t offeredBuild = 0;
-bool waitingForConfirm = false;
-bool uploadOK = false;
-bool rebootPending = false;
+bool waitingForConfirm = false, uploadOK = false, rebootPending = false;
 uint32_t rebootAt = 0;
 
 void screenMessage(const String& line) {
@@ -57,9 +51,8 @@ void statusScreen(const String& heading) {
 String generateAPPassword() {
     const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
     String result;
-    for (int i = 0; i < 14; ++i) {
+    for (int i = 0; i < 14; ++i)
         result += alphabet[esp_random() % (sizeof(alphabet) - 1)];
-    }
     return result;
 }
 
@@ -93,43 +86,38 @@ void startWebUpdater() {
         screenMessage("OTA access point failed");
         return;
     }
-
     otaServer.on("/", HTTP_GET, []() {
         String page =
             "<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>BERTIE Settings</title><h1>BERTIE</h1>"
-            "<h2>Wi-Fi setup (once)</h2>"
-            "<form action='/wifi' method='POST'>"
+            "<h2>Wi-Fi setup</h2><form action='/wifi' method='POST'>"
             "Network SSID:<br><input name='ssid' required maxlength='32' value='";
         page += escapeHTML(homeSSID);
         page += "'><br>Password:<br><input type='password' name='password' maxlength='63'>"
-                "<br><button type='submit'>Save Wi-Fi</button></form>"
-                "<p>Saved Wi-Fi: ";
+                "<br><button type='submit'>Save Wi-Fi</button></form><p>Saved Wi-Fi: ";
         page += homeSSID.length() ? escapeHTML(homeSSID) : "Not configured";
         page += "</p><h2>Emergency firmware upload</h2>"
                 "<form action='/update' method='POST' enctype='multipart/form-data'>"
                 "<input type='file' name='firmware' accept='.bin' required>"
                 "<button type='submit'>Upload application firmware</button></form>"
-                "<p>Use firmware.bin, NOT the merged USB image.</p>"
+                "<p>Use application-only .bin, NOT merged USB image.</p>"
                 "<p>Normal updates: press Fn + U on the Cardputer.</p>";
         otaServer.send(200, "text/html", page);
     });
-
     otaServer.on("/wifi", HTTP_POST, []() {
         String ssid = otaServer.arg("ssid");
         String pass = otaServer.arg("password");
         if (ssid.length() == 0 || ssid.length() > 32 || pass.length() > 63 ||
             (pass.length() > 0 && pass.length() < 8)) {
-            otaServer.send(400, "text/plain", "Invalid SSID or password length");
+            otaServer.send(400, "text/plain", "Invalid SSID/password length");
             return;
         }
         homeSSID = ssid;
         if (pass.length()) homePassword = pass;
         preferences.putString("wifiSSID", homeSSID);
         preferences.putString("wifiPass", homePassword);
-        otaServer.send(200, "text/html", "<h2>Wi-Fi saved</h2><p>Return to BERTIE and press Fn + U.</p>");
+        otaServer.send(200, "text/html", "<h2>Wi-Fi saved</h2><p>Press Fn + U.</p>");
     });
-
     otaServer.on("/update", HTTP_POST,
         []() {
             otaServer.send(uploadOK ? 200 : 500, "text/plain",
@@ -166,8 +154,7 @@ void showAPInformation() {
 bool connectToHomeWiFi() {
     if (homeSSID.isEmpty()) {
         statusScreen("Wi-Fi not set");
-        screenMessage("Connect to:");
-        screenMessage("BERTIE-UPDATE");
+        screenMessage("Connect to BERTIE-UPDATE");
         screenMessage("192.168.4.1");
         screenMessage("Fn + P: AP password");
         return false;
@@ -198,10 +185,10 @@ bool connectToHomeWiFi() {
 }
 
 void disconnectHomeWiFi() {
-    WiFi.disconnect(false, false); // Keep the emergency Wi-Fi AP active.
+    WiFi.disconnect(false, false); // Keep emergency access point active.
 }
 
-// Run only when requested by the keyboard: no periodic polling.
+// Only invoked by Fn + U. Never polls GitHub in the background.
 void checkForFirmwareUpdate() {
     waitingForConfirm = false;
     offeredURL = "";
@@ -211,32 +198,23 @@ void checkForFirmwareUpdate() {
     if (!connectToHomeWiFi()) { disconnectHomeWiFi(); return; }
 
     WiFiClientSecure secure;
-    secure.setCACert(BERTIE_GITHUB_ROOT_CAS);
+    secure.setCACertBundle(x509_crt_bundle);
+    secure.setHandshakeTimeout(20);
     HTTPClient http;
-    http.setTimeout(15000);
+    http.setTimeout(20000);
     if (!http.begin(secure, GITHUB_RELEASE_API)) {
         screenMessage("Cannot reach GitHub");
-        disconnectHomeWiFi();
-        return;
+        disconnectHomeWiFi(); return;
     }
     http.addHeader("User-Agent", "BERTIE-Cardputer-ADV");
-    int code = http.GET();
-
+    http.addHeader("Accept", "application/vnd.github+json");
+    const int code = http.GET();
     if (code != HTTP_CODE_OK) {
-        screenMessage("GitHub error:");
-        screenMessage(String(code));
-
-        if (code < 0) {
-            screenMessage(http.errorToString(code));
-        }
-
-        Serial.printf("GitHub HTTP result: %d\n", code);
-
-        http.end();
-        disconnectHomeWiFi();
-        return;
+        screenMessage("GitHub HTTP: " + String(code));
+        if (code < 0) screenMessage(http.errorToString(code));
+        http.end(); disconnectHomeWiFi(); return;
     }
-    String body = http.getString();
+    const String body = http.getString();
     http.end();
     DynamicJsonDocument doc(24576);
     if (deserializeJson(doc, body)) {
@@ -285,10 +263,11 @@ void installFirmwareUpdate() {
         disconnectHomeWiFi(); return;
     }
     WiFiClientSecure secure;
-    secure.setCACert(BERTIE_GITHUB_ROOT_CAS);
+    secure.setCACertBundle(x509_crt_bundle);
+    secure.setHandshakeTimeout(20);
     httpUpdate.rebootOnUpdate(false);
     httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-    t_httpUpdate_return result = httpUpdate.update(secure, offeredURL);
+    const t_httpUpdate_return result = httpUpdate.update(secure, offeredURL);
     if (result == HTTP_UPDATE_OK) {
         screenMessage("Update installed!");
         delay(800);
@@ -307,7 +286,7 @@ void setup() {
     loadSettings();
 
     auto& d = M5Cardputer.Display;
-    d.setRotation(0); // Keep user's chosen orientation.
+    d.setRotation(0);
     d.fillScreen(TFT_BLACK);
     d.setTextColor(TFT_GREEN);
     d.setTextSize(3);
@@ -322,7 +301,8 @@ void setup() {
     d.println("Keyboard test:");
 
     startWebUpdater();
-    Serial.printf("BERTIE build %lu; emergency AP %s\n", (unsigned long)BERTIE_BUILD_NUMBER, UPDATE_AP_SSID);
+    Serial.printf("BERTIE build %lu; emergency AP %s\n",
+                  (unsigned long)BERTIE_BUILD_NUMBER, UPDATE_AP_SSID);
 }
 
 void loop() {
