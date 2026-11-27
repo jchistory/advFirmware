@@ -37,7 +37,10 @@ uint32_t rebootAt = 0, apLastActivity = 0;
 bool homeScreenActive = false;
 String homeInput;
 uint32_t lastStatusDrawMs = 0;
-static constexpr int STATUS_BAR_HEIGHT = 22;
+// BERTIE_COMPACT_LANDSCAPE_LAYOUT
+static constexpr int STATUS_BAR_HEIGHT = 18;
+// Both 1 and 3 are landscape on the Cardputer ADV. Fn+R flips them.
+uint8_t displayRotation = 3;
 
 void screenMessage(const String& line) {
     M5Cardputer.Display.println(line);
@@ -47,7 +50,7 @@ void screenMessage(const String& line) {
 // Header colours match BERTIE's navy/gold workshop palette.
 void drawStatusBar() {
     auto& d = M5Cardputer.Display;
-    const int width = d.width();
+    const int w = d.width();
     const uint16_t navy = d.color565(37, 67, 107);
     const uint16_t gold = d.color565(201, 169, 107);
     const uint16_t dim = d.color565(155, 170, 188);
@@ -55,47 +58,47 @@ void drawStatusBar() {
     const int savedX = d.getCursorX();
     const int savedY = d.getCursorY();
 
-    d.fillRect(0, 0, width, STATUS_BAR_HEIGHT, navy);
-    d.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, width, gold);
+    d.fillRect(0, 0, w, STATUS_BAR_HEIGHT, navy);
+    d.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, w, gold);
     d.setTextFont(1);
     d.setTextSize(1);
     d.setTextWrap(false);
 
-    // Official M5Cardputer API: battery percent is estimated from voltage.
+    // Battery estimate from M5Cardputer. Power.getBatteryLevel() returns 0-100.
     const int battery = M5Cardputer.Power.getBatteryLevel();
-    const bool validBattery = battery >= 0 && battery <= 100;
-    const uint16_t battColour = !validBattery ? dim : (battery <= 20 ? gold : good);
-    d.drawRect(5, 6, 19, 10, TFT_WHITE);
-    d.fillRect(24, 9, 2, 4, TFT_WHITE); // Battery terminal
-    if (validBattery && battery > 0) {
-        d.fillRect(7, 8, (battery * 15) / 100, 6, battColour);
-    }
+    const bool valid = battery >= 0 && battery <= 100;
+    const uint16_t batteryColor = !valid ? dim : (battery <= 20 ? gold : good);
+    d.drawRect(5, 4, 18, 9, TFT_WHITE);
+    d.fillRect(23, 7, 2, 3, TFT_WHITE);
+    if (valid && battery > 0)
+        d.fillRect(7, 6, (battery * 14) / 100, 5, batteryColor);
     d.setTextColor(TFT_WHITE);
-    d.setCursor(31, 8);
-    d.print(validBattery ? String(battery) + "%" : String("--%"));
+    d.setCursor(29, 5);
+    d.print(valid ? String(battery) + "%" : String("--%"));
 
-    // Wi-Fi is normally switched OFF for battery life.
+    // The emergency access point is distinct from a connected Wi-Fi station.
     const bool stationConnected = WiFi.status() == WL_CONNECTED;
     const bool active = stationConnected || emergencyAPActive;
-    const uint16_t wifiColour = stationConnected ? good : (emergencyAPActive ? gold : dim);
-    const int wx = width / 2 - 14;
-    d.drawLine(wx - 8, 7, wx, 2, wifiColour);
-    d.drawLine(wx, 2, wx + 8, 7, wifiColour);
-    d.drawLine(wx - 4, 11, wx, 8, wifiColour);
-    d.drawLine(wx, 8, wx + 4, 11, wifiColour);
-    d.fillCircle(wx, 15, 1, wifiColour);
-    if (!active) d.drawLine(wx - 9, 17, wx + 9, 1, dim);
-    d.setTextColor(wifiColour);
-    d.setCursor(wx + 13, 8);
+    const uint16_t wifiColor = stationConnected ? good : (emergencyAPActive ? gold : dim);
+    const int x = w / 2 - 18;
+    d.drawLine(x - 7, 6, x, 2, wifiColor);
+    d.drawLine(x, 2, x + 7, 6, wifiColor);
+    d.drawLine(x - 4, 10, x, 7, wifiColor);
+    d.drawLine(x, 7, x + 4, 10, wifiColor);
+    d.fillCircle(x, 13, 1, wifiColor);
+    if (!active) d.drawLine(x - 8, 15, x + 8, 1, dim);
+    d.setTextColor(wifiColor);
+    d.setCursor(x + 12, 5);
     d.print(stationConnected ? "ON" : (emergencyAPActive ? "AP" : "OFF"));
 
-    // GitHub Actions embeds this number; local builds show b0.
+    // GitHub Actions supplies the build number. Local Codespaces builds are b0.
     const String version = String("v0.3 b") + String(BERTIE_BUILD_NUMBER);
     d.setTextColor(TFT_WHITE);
-    d.setCursor(width - 5 - static_cast<int>(version.length()) * 6, 8);
+    d.setCursor(w - 5 - static_cast<int>(version.length()) * 6, 5);
     d.print(version);
 
     d.setCursor(savedX, savedY);
+    d.setTextWrap(!homeScreenActive);
     lastStatusDrawMs = millis();
 }
 
@@ -115,14 +118,16 @@ void statusScreen(const String& heading) {
 
 void drawHomeInput() {
     auto& d = M5Cardputer.Display;
-    const int width = d.width();
-    d.fillRect(6, 99, width - 12, 18, TFT_BLACK);
+    const int w = d.width();
+    const uint16_t border = d.color565(69, 89, 112);
+    d.fillRect(6, 87, w - 12, 26, TFT_BLACK);
+    d.drawRect(6, 87, w - 12, 26, border);
     d.setTextFont(1);
     d.setTextSize(1);
     d.setTextColor(TFT_WHITE);
     d.setTextWrap(false);
-    d.setCursor(8, 104);
-    const size_t maxChars = static_cast<size_t>((width - 27) / 6);
+    d.setCursor(11, 96);
+    const size_t maxChars = static_cast<size_t>((w - 30) / 6);
     const String visible = homeInput.length() > maxChars
         ? homeInput.substring(homeInput.length() - maxChars)
         : homeInput;
@@ -136,22 +141,25 @@ void drawHomeScreen() {
     drawStatusBar();
     d.setTextWrap(false);
     d.setTextFont(1);
-    d.setTextSize(3);
+    d.setTextSize(2);
     d.setTextColor(d.color565(242, 232, 213));
-    d.setCursor(8, 29);
+    d.setCursor(8, 26);
     d.print("BERTIE");
+
     d.setTextSize(1);
     d.setTextColor(d.color565(201, 169, 107));
-    d.setCursor(9, 59);
+    d.setCursor(8, 48);
     d.print("Bindery workshop terminal");
-    d.drawFastHLine(8, 77, d.width() - 16, d.color565(70, 86, 108));
+    d.drawFastHLine(8, 64, d.width() - 16, d.color565(70, 86, 108));
+
     d.setTextColor(TFT_WHITE);
-    d.setCursor(8, 85);
+    d.setCursor(8, 73);
     d.print("Ready for input");
     drawHomeInput();
+
     d.setTextColor(d.color565(155, 170, 188));
-    d.setCursor(8, 125);
-    d.print("Fn+U Update     Fn+P Wi-Fi");
+    d.setCursor(8, 123);
+    d.print("Fn+U Update   Fn+P AP   Fn+R Flip");
 }
 
 String generateAPPassword() {
@@ -445,8 +453,13 @@ void setup() {
     loadSettings();
 
     auto& d = M5Cardputer.Display;
-    // The Cardputer's 240x135 display is landscape at rotation 1.
-    d.setRotation(1);
+    // Start landscape. Fn+R flips between the two landscape directions.
+    // Saved preference survives future GitHub OTA installs.
+    const uint8_t savedRotation = preferences.getUChar("screenRot", 3);
+    displayRotation = (savedRotation == 1 || savedRotation == 3) ? savedRotation : 3;
+    d.setRotation(displayRotation);
+    Serial.printf("Display: %dx%d, rotation %u\n", d.width(), d.height(),
+                  static_cast<unsigned>(displayRotation));
     configureWebUpdater();
     WiFi.mode(WIFI_OFF);
     drawHomeScreen();
@@ -472,6 +485,12 @@ void loop() {
             checkForFirmwareUpdate();
         } else if (keys.fn && M5Cardputer.Keyboard.isKeyPressed('p')) {
             toggleEmergencyAP();
+        } else if (!waitingForConfirm && keys.fn && M5Cardputer.Keyboard.isKeyPressed('r')) {
+            // Flip the landscape layout if its direction is wrong for the keyboard.
+            displayRotation = displayRotation == 3 ? 1 : 3;
+            preferences.putUChar("screenRot", displayRotation);
+            M5Cardputer.Display.setRotation(displayRotation);
+            drawHomeScreen();
         } else if (waitingForConfirm && keys.enter && !keys.fn) {
             installFirmwareUpdate();
         } else if (waitingForConfirm && (keys.backspace || keys.esc)) {
