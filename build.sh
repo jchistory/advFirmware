@@ -8,9 +8,9 @@ echo "Building BERTIE Cardputer ADV firmware..."
 cp .pio/build/cardputer-adv/firmware.bin bertie-v0.3-ota.bin
 
 echo "Creating USB recovery image..."
-.venv/bin/python \
+"$HOME/.platformio/penv/bin/python" \
   "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" \
-  --chip esp32s3 merge_bin \
+  --chip esp32s3 merge-bin \
   -o bertie-v0.3-merged.bin \
   --flash_mode dio \
   --flash_freq 40m \

@@ -197,10 +197,19 @@ void checkForFirmwareUpdate() {
     screenMessage("Connecting...");
     if (!connectToHomeWiFi()) { disconnectHomeWiFi(); return; }
 
+    Serial.println("DEBUG 1: Creating secure client");
+
     WiFiClientSecure secure;
-    secure.setCACertBundle(x509_crt_bundle);
+
+    Serial.println("DEBUG 2: Setting CA bundle");
+    secure.setCACertBundle(x509_crt_bundle, x509_crt_bundle_len);
+
+    Serial.println("DEBUG 3: Setting handshake timeout");
     secure.setHandshakeTimeout(20);
+
+    Serial.println("DEBUG 4: Creating HTTP client");
     HTTPClient http;
+
     http.setTimeout(20000);
     if (!http.begin(secure, GITHUB_RELEASE_API)) {
         screenMessage("Cannot reach GitHub");
@@ -208,7 +217,12 @@ void checkForFirmwareUpdate() {
     }
     http.addHeader("User-Agent", "BERTIE-Cardputer-ADV");
     http.addHeader("Accept", "application/vnd.github+json");
+    
+    Serial.println("DEBUG 5: Starting GitHub GET");
+
     const int code = http.GET();
+
+    Serial.printf("DEBUG 6: HTTP result = %d\n", code);
     if (code != HTTP_CODE_OK) {
         screenMessage("GitHub HTTP: " + String(code));
         if (code < 0) screenMessage(http.errorToString(code));
@@ -263,7 +277,7 @@ void installFirmwareUpdate() {
         disconnectHomeWiFi(); return;
     }
     WiFiClientSecure secure;
-    secure.setCACertBundle(x509_crt_bundle);
+    secure.setCACertBundle(x509_crt_bundle, x509_crt_bundle_len);
     secure.setHandshakeTimeout(20);
     httpUpdate.rebootOnUpdate(false);
     httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
