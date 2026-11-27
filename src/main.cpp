@@ -39,8 +39,6 @@ String homeInput;
 uint32_t lastStatusDrawMs = 0;
 // BERTIE_COMPACT_LANDSCAPE_LAYOUT
 static constexpr int STATUS_BAR_HEIGHT = 18;
-// Both 1 and 3 are landscape on the Cardputer ADV. Fn+R flips them.
-uint8_t displayRotation = 3;
 
 void screenMessage(const String& line) {
     M5Cardputer.Display.println(line);
@@ -159,7 +157,7 @@ void drawHomeScreen() {
 
     d.setTextColor(d.color565(155, 170, 188));
     d.setCursor(8, 123);
-    d.print("Fn+U Update   Fn+P AP   Fn+R Flip");
+    d.print("Fn+U Update       Fn+P AP");
 }
 
 String generateAPPassword() {
@@ -453,13 +451,9 @@ void setup() {
     loadSettings();
 
     auto& d = M5Cardputer.Display;
-    // Start landscape. Fn+R flips between the two landscape directions.
-    // Saved preference survives future GitHub OTA installs.
-    const uint8_t savedRotation = preferences.getUChar("screenRot", 3);
-    displayRotation = (savedRotation == 1 || savedRotation == 3) ? savedRotation : 3;
-    d.setRotation(displayRotation);
-    Serial.printf("Display: %dx%d, rotation %u\n", d.width(), d.height(),
-                  static_cast<unsigned>(displayRotation));
+    // Fixed screen orientation; no saved rotation preference or shortcut.
+    d.setRotation(0);
+    Serial.printf("Display: %dx%d, rotation 0\n", d.width(), d.height());
     configureWebUpdater();
     WiFi.mode(WIFI_OFF);
     drawHomeScreen();
@@ -485,12 +479,7 @@ void loop() {
             checkForFirmwareUpdate();
         } else if (keys.fn && M5Cardputer.Keyboard.isKeyPressed('p')) {
             toggleEmergencyAP();
-        } else if (!waitingForConfirm && keys.fn && M5Cardputer.Keyboard.isKeyPressed('r')) {
-            // Flip the landscape layout if its direction is wrong for the keyboard.
-            displayRotation = displayRotation == 3 ? 1 : 3;
-            preferences.putUChar("screenRot", displayRotation);
-            M5Cardputer.Display.setRotation(displayRotation);
-            drawHomeScreen();
+
         } else if (waitingForConfirm && keys.enter && !keys.fn) {
             installFirmwareUpdate();
         } else if (waitingForConfirm && (keys.backspace || keys.esc)) {
