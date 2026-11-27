@@ -33,21 +33,125 @@ bool waitingForConfirm = false, uploadOK = false, rebootPending = false;
 bool emergencyAPActive = false, uploadInProgress = false;
 uint32_t rebootAt = 0, apLastActivity = 0;
 
+// Screen state. Status is refreshed infrequently to conserve battery.
+bool homeScreenActive = false;
+String homeInput;
+uint32_t lastStatusDrawMs = 0;
+static constexpr int STATUS_BAR_HEIGHT = 22;
+
 void screenMessage(const String& line) {
     M5Cardputer.Display.println(line);
     Serial.println(line);
 }
 
+// Header colours match BERTIE's navy/gold workshop palette.
+void drawStatusBar() {
+    auto& d = M5Cardputer.Display;
+    const int width = d.width();
+    const uint16_t navy = d.color565(37, 67, 107);
+    const uint16_t gold = d.color565(201, 169, 107);
+    const uint16_t dim = d.color565(155, 170, 188);
+    const uint16_t good = d.color565(157, 224, 172);
+    const int savedX = d.getCursorX();
+    const int savedY = d.getCursorY();
+
+    d.fillRect(0, 0, width, STATUS_BAR_HEIGHT, navy);
+    d.drawFastHLine(0, STATUS_BAR_HEIGHT - 1, width, gold);
+    d.setTextFont(1);
+    d.setTextSize(1);
+    d.setTextWrap(false);
+
+    // Official M5Cardputer API: battery percent is estimated from voltage.
+    const int battery = M5Cardputer.Power.getBatteryLevel();
+    const bool validBattery = battery >= 0 && battery <= 100;
+    const uint16_t battColour = !validBattery ? dim : (battery <= 20 ? gold : good);
+    d.drawRect(5, 6, 19, 10, TFT_WHITE);
+    d.fillRect(24, 9, 2, 4, TFT_WHITE); // Battery terminal
+    if (validBattery && battery > 0) {
+        d.fillRect(7, 8, (battery * 15) / 100, 6, battColour);
+    }
+    d.setTextColor(TFT_WHITE);
+    d.setCursor(31, 8);
+    d.print(validBattery ? String(battery) + "%" : String("--%"));
+
+    // Wi-Fi is normally switched OFF for battery life.
+    const bool stationConnected = WiFi.status() == WL_CONNECTED;
+    const bool active = stationConnected || emergencyAPActive;
+    const uint16_t wifiColour = stationConnected ? good : (emergencyAPActive ? gold : dim);
+    const int wx = width / 2 - 14;
+    d.drawLine(wx - 8, 7, wx, 2, wifiColour);
+    d.drawLine(wx, 2, wx + 8, 7, wifiColour);
+    d.drawLine(wx - 4, 11, wx, 8, wifiColour);
+    d.drawLine(wx, 8, wx + 4, 11, wifiColour);
+    d.fillCircle(wx, 15, 1, wifiColour);
+    if (!active) d.drawLine(wx - 9, 17, wx + 9, 1, dim);
+    d.setTextColor(wifiColour);
+    d.setCursor(wx + 13, 8);
+    d.print(stationConnected ? "ON" : (emergencyAPActive ? "AP" : "OFF"));
+
+    // GitHub Actions embeds this number; local builds show b0.
+    const String version = String("v0.3 b") + String(BERTIE_BUILD_NUMBER);
+    d.setTextColor(TFT_WHITE);
+    d.setCursor(width - 5 - static_cast<int>(version.length()) * 6, 8);
+    d.print(version);
+
+    d.setCursor(savedX, savedY);
+    lastStatusDrawMs = millis();
+}
+
 void statusScreen(const String& heading) {
     auto& d = M5Cardputer.Display;
+    homeScreenActive = false;
     d.fillScreen(TFT_BLACK);
-    d.setCursor(3, 3);
+    drawStatusBar();
+    d.setCursor(3, STATUS_BAR_HEIGHT + 6);
     d.setTextColor(TFT_GREEN);
     d.setTextSize(2);
     d.println(heading);
     d.setTextColor(TFT_WHITE);
     d.setTextSize(1);
     d.setTextWrap(true);
+}
+
+void drawHomeInput() {
+    auto& d = M5Cardputer.Display;
+    const int width = d.width();
+    d.fillRect(6, 99, width - 12, 18, TFT_BLACK);
+    d.setTextFont(1);
+    d.setTextSize(1);
+    d.setTextColor(TFT_WHITE);
+    d.setTextWrap(false);
+    d.setCursor(8, 104);
+    const size_t maxChars = static_cast<size_t>((width - 27) / 6);
+    const String visible = homeInput.length() > maxChars
+        ? homeInput.substring(homeInput.length() - maxChars)
+        : homeInput;
+    d.print("> " + visible + "_");
+}
+
+void drawHomeScreen() {
+    auto& d = M5Cardputer.Display;
+    homeScreenActive = true;
+    d.fillScreen(TFT_BLACK);
+    drawStatusBar();
+    d.setTextWrap(false);
+    d.setTextFont(1);
+    d.setTextSize(3);
+    d.setTextColor(d.color565(242, 232, 213));
+    d.setCursor(8, 29);
+    d.print("BERTIE");
+    d.setTextSize(1);
+    d.setTextColor(d.color565(201, 169, 107));
+    d.setCursor(9, 59);
+    d.print("Bindery workshop terminal");
+    d.drawFastHLine(8, 77, d.width() - 16, d.color565(70, 86, 108));
+    d.setTextColor(TFT_WHITE);
+    d.setCursor(8, 85);
+    d.print("Ready for input");
+    drawHomeInput();
+    d.setTextColor(d.color565(155, 170, 188));
+    d.setCursor(8, 125);
+    d.print("Fn+U Update     Fn+P Wi-Fi");
 }
 
 String generateAPPassword() {
@@ -341,22 +445,11 @@ void setup() {
     loadSettings();
 
     auto& d = M5Cardputer.Display;
-    d.setRotation(0);
-    d.fillScreen(TFT_BLACK);
-    d.setTextColor(TFT_GREEN);
-    d.setTextSize(3);
-    d.setCursor(8, 8);
-    d.println("BERTIE");
-    d.setTextSize(2);
-    d.setTextColor(TFT_YELLOW);
-    d.println("Bindery Executive for Robotics, Tools, Information & Equipment");
-    d.setTextColor(TFT_WHITE);
-    d.println();
-    d.println("Terminal v0.3");
-    d.println("Keyboard test:");
-
+    // The Cardputer's 240x135 display is landscape at rotation 1.
+    d.setRotation(1);
     configureWebUpdater();
     WiFi.mode(WIFI_OFF);
+    drawHomeScreen();
     Serial.printf("BERTIE build %lu; Wi-Fi off; Fn+P emergency AP: %s\n",
                   (unsigned long)BERTIE_BUILD_NUMBER, UPDATE_AP_SSID);
 }
@@ -371,6 +464,7 @@ void loop() {
         }
     }
     if (rebootPending && millis() - rebootAt > 1500) ESP.restart();
+    if (millis() - lastStatusDrawMs >= 5000) drawStatusBar();
 
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
         auto keys = M5Cardputer.Keyboard.keysState();
@@ -386,8 +480,15 @@ void loop() {
             disconnectHomeWiFi();
             statusScreen("Update cancelled");
         } else if (!waitingForConfirm && !keys.fn) {
-            for (char c : keys.word) M5Cardputer.Display.print(c);
-            if (keys.enter) M5Cardputer.Display.println();
+            // Return to the home screen on ordinary typing after a status page.
+            if (!homeScreenActive) drawHomeScreen();
+            if (keys.backspace && !homeInput.isEmpty()) {
+                homeInput.remove(homeInput.length() - 1);
+            }
+            if (keys.enter) homeInput = "";
+            for (char c : keys.word) homeInput += c;
+            if (homeInput.length() > 160) homeInput.remove(0, homeInput.length() - 160);
+            drawHomeInput();
         }
     }
     delay(10);
