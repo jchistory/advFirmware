@@ -24,12 +24,14 @@ static constexpr const char* UPDATE_AP_SSID = "BERTIE-UPDATE";
 static constexpr const char* GITHUB_RELEASE_API =
     "https://api.github.com/repos/jchistory/advFirmware/releases/latest";
 static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
+static constexpr uint32_t AP_IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 WebServer otaServer(80);
 Preferences preferences;
 String otaPassword, homeSSID, homePassword, offeredURL;
 uint32_t offeredBuild = 0;
 bool waitingForConfirm = false, uploadOK = false, rebootPending = false;
-uint32_t rebootAt = 0;
+bool emergencyAPActive = false, uploadInProgress = false;
+uint32_t rebootAt = 0, apLastActivity = 0;
 
 void screenMessage(const String& line) {
     M5Cardputer.Display.println(line);
@@ -80,13 +82,9 @@ String escapeHTML(const String& input) {
     return s;
 }
 
-void startWebUpdater() {
-    WiFi.mode(WIFI_AP_STA);
-    if (!WiFi.softAP(UPDATE_AP_SSID, otaPassword.c_str())) {
-        screenMessage("OTA access point failed");
-        return;
-    }
+void configureWebUpdater() {
     otaServer.on("/", HTTP_GET, []() {
+        apLastActivity = millis();
         String page =
             "<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>BERTIE Settings</title><h1>BERTIE</h1>"
@@ -105,6 +103,7 @@ void startWebUpdater() {
         otaServer.send(200, "text/html", page);
     });
     otaServer.on("/wifi", HTTP_POST, []() {
+        apLastActivity = millis();
         String ssid = otaServer.arg("ssid");
         String pass = otaServer.arg("password");
         if (ssid.length() == 0 || ssid.length() > 32 || pass.length() > 63 ||
@@ -120,13 +119,16 @@ void startWebUpdater() {
     });
     otaServer.on("/update", HTTP_POST,
         []() {
+            apLastActivity = millis();
             otaServer.send(uploadOK ? 200 : 500, "text/plain",
                            uploadOK ? "Firmware installed; restarting." : "Update failed.");
             if (uploadOK) { rebootPending = true; rebootAt = millis(); }
         },
         []() {
+            apLastActivity = millis();
             HTTPUpload& upload = otaServer.upload();
             if (upload.status == UPLOAD_FILE_START) {
+                uploadInProgress = true;
                 uploadOK = Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
             } else if (upload.status == UPLOAD_FILE_WRITE) {
                 if (uploadOK) {
@@ -135,11 +137,12 @@ void startWebUpdater() {
                 }
             } else if (upload.status == UPLOAD_FILE_END) {
                 uploadOK = uploadOK && Update.end(true);
+                uploadInProgress = false;
             } else if (upload.status == UPLOAD_FILE_ABORTED) {
                 Update.abort(); uploadOK = false;
+                uploadInProgress = false;
             }
         });
-    otaServer.begin();
 }
 
 void showAPInformation() {
@@ -148,22 +151,57 @@ void showAPInformation() {
     screenMessage("Password:");
     screenMessage(otaPassword);
     screenMessage("192.168.4.1");
-    screenMessage("Fn + U: update");
+    screenMessage("Fn + P: AP off");
+}
+
+void stopEmergencyAP(bool showStatus = true) {
+    if (!emergencyAPActive || uploadInProgress) return;
+    otaServer.stop();
+    WiFi.softAPdisconnect(false);
+    emergencyAPActive = false;
+    // Keep the station radio only if GitHub OTA is actively connected.
+    WiFi.mode(WiFi.status() == WL_CONNECTED ? WIFI_STA : WIFI_OFF);
+    if (showStatus) {
+        statusScreen("BERTIE Wi-Fi");
+        screenMessage("Emergency AP off");
+        screenMessage("Fn + P: AP on");
+    }
+}
+
+void toggleEmergencyAP() {
+    if (emergencyAPActive) {
+        if (uploadInProgress) {
+            screenMessage("Upload in progress");
+            return;
+        }
+        stopEmergencyAP();
+        return;
+    }
+    WiFi.mode(WiFi.status() == WL_CONNECTED ? WIFI_AP_STA : WIFI_AP);
+    if (!WiFi.softAP(UPDATE_AP_SSID, otaPassword.c_str())) {
+        statusScreen("BERTIE Wi-Fi");
+        screenMessage("OTA access point failed");
+        WiFi.mode(WiFi.status() == WL_CONNECTED ? WIFI_STA : WIFI_OFF);
+        return;
+    }
+    otaServer.begin();
+    emergencyAPActive = true;
+    apLastActivity = millis();
+    showAPInformation();
 }
 
 bool connectToHomeWiFi() {
     if (homeSSID.isEmpty()) {
         statusScreen("Wi-Fi not set");
-        screenMessage("Connect to BERTIE-UPDATE");
-        screenMessage("192.168.4.1");
-        screenMessage("Fn + P: AP password");
+        screenMessage("Fn + P: enable AP");
+        screenMessage("Then open 192.168.4.1");
         return false;
     }
-    WiFi.mode(WIFI_AP_STA);
+    WiFi.mode(emergencyAPActive ? WIFI_AP_STA : WIFI_STA);
     WiFi.begin(homeSSID.c_str(), homePassword.c_str());
     const uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
-        otaServer.handleClient();
+        if (emergencyAPActive) otaServer.handleClient();
         delay(100);
     }
     if (WiFi.status() != WL_CONNECTED) {
@@ -174,7 +212,7 @@ bool connectToHomeWiFi() {
     configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
     const uint32_t ntpStart = millis();
     while (time(nullptr) < 1700000000 && millis() - ntpStart < 12000) {
-        otaServer.handleClient();
+        if (emergencyAPActive) otaServer.handleClient();
         delay(150);
     }
     if (time(nullptr) < 1700000000) {
@@ -185,7 +223,8 @@ bool connectToHomeWiFi() {
 }
 
 void disconnectHomeWiFi() {
-    WiFi.disconnect(false, false); // Keep emergency access point active.
+    WiFi.disconnect(false, false);
+    WiFi.mode(emergencyAPActive ? WIFI_AP : WIFI_OFF);
 }
 
 // Only invoked by Fn + U. Never polls GitHub in the background.
@@ -266,6 +305,8 @@ void checkForFirmwareUpdate() {
     screenMessage("Enter: install");
     screenMessage("Backspace: cancel");
     waitingForConfirm = true;
+    // Enter reconnects; turn the radio off while awaiting confirmation.
+    disconnectHomeWiFi();
 }
 
 void installFirmwareUpdate() {
@@ -314,14 +355,21 @@ void setup() {
     d.println("Terminal v0.3");
     d.println("Keyboard test:");
 
-    startWebUpdater();
-    Serial.printf("BERTIE build %lu; emergency AP %s\n",
+    configureWebUpdater();
+    WiFi.mode(WIFI_OFF);
+    Serial.printf("BERTIE build %lu; Wi-Fi off; Fn+P emergency AP: %s\n",
                   (unsigned long)BERTIE_BUILD_NUMBER, UPDATE_AP_SSID);
 }
 
 void loop() {
     M5Cardputer.update();
-    otaServer.handleClient();
+    if (emergencyAPActive) {
+        otaServer.handleClient();
+        if (!uploadInProgress && !rebootPending &&
+            millis() - apLastActivity >= AP_IDLE_TIMEOUT_MS) {
+            stopEmergencyAP();
+        }
+    }
     if (rebootPending && millis() - rebootAt > 1500) ESP.restart();
 
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
@@ -329,7 +377,7 @@ void loop() {
         if (keys.fn && M5Cardputer.Keyboard.isKeyPressed('u')) {
             checkForFirmwareUpdate();
         } else if (keys.fn && M5Cardputer.Keyboard.isKeyPressed('p')) {
-            showAPInformation();
+            toggleEmergencyAP();
         } else if (waitingForConfirm && keys.enter && !keys.fn) {
             installFirmwareUpdate();
         } else if (waitingForConfirm && (keys.backspace || keys.esc)) {
